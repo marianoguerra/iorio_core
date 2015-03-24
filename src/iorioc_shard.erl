@@ -1,6 +1,7 @@
 -module(iorioc_shard).
 
 -export([get/5, put/5, list_buckets/1, list_streams/2, bucket_size/2,
+         subscribe/5, unsubscribe/4,
          stop/1, start_link/1]).
 
 -ignore_xref([get/5, put/5, list_buckets/1, list_streams/2, bucket_size/2,
@@ -10,6 +11,8 @@
          code_change/3]).
 
 -behaviour(gen_server).
+
+-include_lib("sblob/include/sblob.hrl").
 
 start_link(Opts) ->
     gen_server:start_link(?MODULE, Opts, []).
@@ -29,50 +32,89 @@ list_streams(Pid, Bucket) ->
 bucket_size(Pid, Bucket) ->
     gen_server:call(Pid, {size, Bucket}).
 
+subscribe(Pid, Bucket, Stream, FromSeqNum, SubPid) ->
+    gen_server:call(Pid, {subscribe, Bucket, Stream, FromSeqNum, SubPid}).
+
+unsubscribe(Pid, Bucket, Stream, SubPid) ->
+    gen_server:call(Pid, {unsubscribe, Bucket, Stream, SubPid}).
+
 stop(Pid) ->
     gen_server:call(Pid, stop).
 
--record(state, {partition, partition_str, partition_dir, resources, base_dir}).
+-record(state, {partition, partition_str, partition_dir, gblobs, chans, base_dir}).
 
 %% gen_server callbacks
 
 init(Opts) ->
     {shard_lib_partition, Partition} = proplists:lookup(shard_lib_partition, Opts),
-    BagOpts = [{resource_handler, iorioc_gblob_server_rhandler}, {kv_mod, rscbag_ets}],
-    {ok, Resources} = rscbag:init(BagOpts),
+
+    GBlobsOpts = [{resource_handler, iorioc_gblob_server_rhandler}, {kv_mod, rscbag_ets}],
+    {ok, Gblobs} = rscbag:init(GBlobsOpts),
+
+    ChansOpts = [{resource_handler, iorioc_smc_rhandler}, {kv_mod, rscbag_ets}],
+    {ok, Chans} = rscbag:init(ChansOpts),
+
     BaseDir0 = proplists:get_value(base_dir, Opts, "."),
     BaseDir = filename:absname(BaseDir0),
     PartitionStr = integer_to_list(Partition),
     PartitionDir = filename:join([BaseDir, PartitionStr]),
     State = #state{partition=Partition, partition_str=PartitionStr,
                    partition_dir=PartitionDir,
-                   resources=Resources, base_dir=BaseDir},
+                   gblobs=Gblobs, chans=Chans, base_dir=BaseDir},
     {ok, State}.
 
 handle_call(stop, _From, State) ->
     {stop, normal, stopped, State};
 
 handle_call({get, Bucket, Stream, From, Count}, _From,
-            State=#state{partition_str=PartitionStr, resources=RBag}) ->
+            State=#state{partition_str=PartitionStr, gblobs=Gblobs}) ->
     GetBucketOpts = make_get_bucket_opts(PartitionStr, Bucket, Stream),
-    {Reply, RBag1} = case rscbag:get(RBag, {Bucket, Stream}, GetBucketOpts) of
-                         {{ok, _, Gblob}, RBag11} ->
-                             R = gblob_server:get(Gblob, From, Count),
-                             {R, RBag11};
-                         Error -> Error
-            end,
-    {reply, Reply, State#state{resources=RBag1}};
+    {Reply, Gblobs1} = case rscbag:get(Gblobs, {Bucket, Stream}, GetBucketOpts) of
+                           {{ok, _, Gblob}, Gblobs11} ->
+                               R = gblob_server:get(Gblob, From, Count),
+                               {R, Gblobs11};
+                           Error -> Error
+                       end,
+    {reply, Reply, State#state{gblobs=Gblobs1}};
 
 handle_call({put, Bucket, Stream, Timestamp, Data}, _From,
-            State=#state{partition_str=PartitionStr, resources=RBag}) ->
+            State=#state{partition_str=PartitionStr,
+                         chans=Chans, gblobs=Gblobs}) ->
     GetBucketOpts = make_get_bucket_opts(PartitionStr, Bucket, Stream),
-    {Reply, RBag1} = case rscbag:get(RBag, {Bucket, Stream}, GetBucketOpts) of
-                        {{ok, _, Gblob}, RBag11} ->
-                            R = gblob_server:put(Gblob, Timestamp, Data),
-                            {R, RBag11};
-                        Error -> Error
-                    end,
-    {reply, Reply, State#state{resources=RBag1}};
+    Temp = case rscbag:get(Gblobs, {Bucket, Stream}, GetBucketOpts) of
+               {{ok, _, Gblob}, Gblobs11} ->
+                   R = gblob_server:put(Gblob, Timestamp, Data),
+                   {PubR, Chans11} = publish(Chans, Bucket, Stream, R),
+                   if PubR /= ok ->
+                          lager:warning("Publish error ~s/~s: ~p", [Bucket, Stream, PubR]);
+                      true -> ok
+                   end,
+                   {R, Gblobs11, Chans11};
+               Error -> {Error, Gblobs, Chans}
+           end,
+    {Reply, Gblobs1, Chans1} = Temp,
+    {reply, Reply, State#state{gblobs=Gblobs1, chans=Chans1}};
+
+handle_call({subscribe, Bucket, Stream, FromSeqNum, Pid}, _From,
+            State=#state{chans=Chans}) ->
+    {Reply, Chans1} = with_channel(Chans, Bucket, Stream,
+                          fun (Chann) ->
+                                  if FromSeqNum == nil -> ok;
+                                     true -> smc:replay(Chann, Pid, FromSeqNum)
+                                  end,
+                                  smc:subscribe(Chann, Pid),
+                                  ok
+                          end),
+    {reply, Reply, State#state{chans=Chans1}};
+
+handle_call({unsubscribe, Bucket, Stream, Pid}, _From,
+            State=#state{chans=Chans}) ->
+    {Reply, Chans1} = with_channel(Chans, Bucket, Stream,
+                                   fun (Chann) ->
+                                           smc:unsubscribe(Chann, Pid),
+                                           ok
+                                   end),
+    {reply, Reply, State#state{chans=Chans1}};
 
 handle_call({size, Bucket}, _From, State=#state{partition_dir=PartitionDir}) ->
     Streams = list_stream_names(PartitionDir, Bucket),
@@ -132,3 +174,30 @@ stream_size(Path, Bucket, Stream) ->
 list_stream_names(Path, Bucket) ->
     FullPath = filename:join([Path, Bucket]),
     lists:map(fun list_to_binary/1, list_dir(FullPath)).
+
+get_seqnum(#sblob_entry{seqnum=SeqNum}) -> SeqNum.
+
+with_channel(Chans, Bucket, Stream, Fun) ->
+    BufferSize = 50,
+    ChanName = list_to_binary(io_lib:format("~s/~s", [Bucket, Stream])),
+    GetSeqNum = fun get_seqnum/1,
+    ChanOpts = [{buffer_size, BufferSize},
+                {name, ChanName},
+                {get_seqnum, GetSeqNum}],
+    case rscbag:get(Chans, {Bucket, Stream}, ChanOpts) of
+        {{ok, _, Chan}, Chans1} ->
+            {Fun(Chan), Chans1};
+        Error ->
+            {Error, Chans}
+    end.
+
+publish(Chans, Bucket, Stream, Entry) ->
+    with_channel(Chans, Bucket, Stream,
+                 fun (Chan) ->
+                         try
+                             smc:send(Chan, Entry),
+                             ok
+                         catch
+                             Type:Error -> {error, {Type, Error}}
+                         end
+                 end).
