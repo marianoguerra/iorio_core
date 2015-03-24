@@ -1,5 +1,5 @@
 -module(iorioc).
--export([get/4, get/5, put/5, list_buckets/1, list_streams/2,
+-export([ping/1, get/4, get/5, put/5, list_buckets/1, list_streams/2,
          subscribe/4, subscribe/5, unsubscribe/4,
          bucket_size/2, start_link/1]).
 
@@ -47,3 +47,7 @@ subscribe(Shard, Bucket, Stream, FromSeqNum, Pid) ->
 unsubscribe(Shard, Bucket, Stream, Pid) ->
     MFA = {iorioc_shard, unsubscribe, [Bucket, Stream, Pid]},
     shard:handle(Shard, {Bucket, Stream}, MFA).
+
+ping(Shard) ->
+    MFA = {iorioc_shard, ping, []},
+    shard:handle(Shard, {<<"ping">>, now()}, MFA).

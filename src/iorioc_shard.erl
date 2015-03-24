@@ -1,6 +1,6 @@
 -module(iorioc_shard).
 
--export([get/5, put/5, list_buckets/1, list_streams/2, bucket_size/2,
+-export([ping/1, get/5, put/5, list_buckets/1, list_streams/2, bucket_size/2,
          subscribe/5, unsubscribe/4,
          stop/1, start_link/1]).
 
@@ -38,8 +38,9 @@ subscribe(Pid, Bucket, Stream, FromSeqNum, SubPid) ->
 unsubscribe(Pid, Bucket, Stream, SubPid) ->
     gen_server:call(Pid, {unsubscribe, Bucket, Stream, SubPid}).
 
-stop(Pid) ->
-    gen_server:call(Pid, stop).
+ping(Pid) -> gen_server:call(Pid, ping).
+
+stop(Pid) -> gen_server:call(Pid, stop).
 
 -record(state, {partition, partition_str, partition_dir, gblobs, chans, base_dir}).
 
@@ -125,6 +126,9 @@ handle_call({size, Bucket}, _From, State=#state{partition_dir=PartitionDir}) ->
                             {NewTotalSize, NewSizes}
                     end, {0, []}, Streams),
     {reply, R, State};
+
+handle_call(ping, _From, State=#state{partition=Partition}) ->
+    {reply, {pong, Partition}, State};
 
 handle_call(list_buckets, _From, State=#state{partition_dir=PartitionDir}) ->
     Buckets = list_bucket_names(PartitionDir),
