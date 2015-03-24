@@ -1,8 +1,9 @@
 -module(iorioc).
--export([get/4, get/5, put/5, list_buckets/1, list_streams/2, start_link/1]).
+-export([get/4, get/5, put/5, list_buckets/1, list_streams/2,
+         bucket_size/2, start_link/1]).
 
 -ignore_xref([get/4, get/5, put/5, list_buckets/1, list_streams/2,
-              start_link/1]).
+              bucket_size/2, start_link/1]).
 
 start_link(Opts) ->
     Partitions = proplists:get_value(partitions, Opts, 64),
@@ -29,4 +30,8 @@ list_buckets(Shard) ->
 
 list_streams(Shard, Bucket) ->
     MFA = {iorioc_shard, list_streams, [Bucket]},
+    shard:handle_all(Shard, MFA).
+
+bucket_size(Shard, Bucket) ->
+    MFA = {iorioc_shard, bucket_size, [Bucket]},
     shard:handle_all(Shard, MFA).
