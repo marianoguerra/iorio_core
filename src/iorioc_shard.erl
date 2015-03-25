@@ -68,34 +68,28 @@ init(Opts) ->
 handle_call(stop, _From, State) ->
     {stop, normal, stopped, State};
 
-handle_call({get, Bucket, Stream, From, Count}, _From,
-            State=#state{partition_str=PartitionStr, gblobs=Gblobs}) ->
-    GetBucketOpts = make_get_bucket_opts(PartitionStr, Bucket, Stream),
-    {Reply, Gblobs1} = case rscbag:get(Gblobs, {Bucket, Stream}, GetBucketOpts) of
-                           {{ok, _, Gblob}, Gblobs11} ->
-                               R = gblob_server:get(Gblob, From, Count),
-                               {R, Gblobs11};
-                           Error -> Error
-                       end,
-    {reply, Reply, State#state{gblobs=Gblobs1}};
+handle_call({get, Bucket, Stream, From, Count}, _From, State) ->
+    Fun = fun (Gblob) -> gblob_server:get(Gblob, From, Count) end,
+    {_, Reply, State1} = with_bucket(State, Bucket, Stream, Fun),
+    {reply, Reply, State1};
 
-handle_call({put, Bucket, Stream, Timestamp, Data}, _From,
-            State=#state{partition_str=PartitionStr,
-                         chans=Chans, gblobs=Gblobs}) ->
-    GetBucketOpts = make_get_bucket_opts(PartitionStr, Bucket, Stream),
-    Temp = case rscbag:get(Gblobs, {Bucket, Stream}, GetBucketOpts) of
-               {{ok, _, Gblob}, Gblobs11} ->
-                   R = gblob_server:put(Gblob, Timestamp, Data),
-                   {PubR, Chans11} = publish(Chans, Bucket, Stream, R),
-                   if PubR /= ok ->
-                          lager:warning("Publish error ~s/~s: ~p", [Bucket, Stream, PubR]);
-                      true -> ok
-                   end,
-                   {R, Gblobs11, Chans11};
-               Error -> {Error, Gblobs, Chans}
-           end,
-    {Reply, Gblobs1, Chans1} = Temp,
-    {reply, Reply, State#state{gblobs=Gblobs1, chans=Chans1}};
+handle_call({put, Bucket, Stream, Timestamp, Data}, _From, State=#state{chans=Chans}) ->
+    Fun = fun (Gblob) ->
+                  Entry = gblob_server:put(Gblob, Timestamp, Data),
+                  {PubR, Chans1} = publish(Chans, Bucket, Stream, Entry),
+                  if PubR /= ok ->
+                         lager:warning("Publish error ~s/~s: ~p", [Bucket, Stream, PubR]);
+                     true -> ok
+                  end,
+                  {Entry, Chans1}
+          end,
+
+    case with_bucket(State, Bucket, Stream, Fun) of
+        {ok, {R, Chans1}, S1} ->
+            {reply, R, S1#state{chans=Chans1}};
+        {error, R, S1} ->
+            {reply, R, S1}
+    end;
 
 handle_call({subscribe, Bucket, Stream, FromSeqNum, Pid}, _From,
             State=#state{chans=Chans}) ->
@@ -206,3 +200,12 @@ publish(Chans, Bucket, Stream, Entry) ->
                              Type:Error -> {error, {Type, Error}}
                          end
                  end).
+
+with_bucket(State=#state{partition_str=PartitionStr, gblobs=Gblobs}, Bucket,
+            Stream, Fun) ->
+    GetBucketOpts = make_get_bucket_opts(PartitionStr, Bucket, Stream),
+    case rscbag:get(Gblobs, {Bucket, Stream}, GetBucketOpts) of
+        {{ok, _, Gblob}, Gblobs1} -> {ok, Fun(Gblob), State#state{gblobs=Gblobs1}};
+        Error -> {error, Error, State}
+    end.
+
