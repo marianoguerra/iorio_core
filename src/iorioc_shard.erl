@@ -201,9 +201,9 @@ publish(Chans, Bucket, Stream, Entry) ->
                          end
                  end).
 
-with_bucket(State=#state{partition_str=PartitionStr, gblobs=Gblobs}, Bucket,
+with_bucket(State=#state{partition_dir=PartitionDir, gblobs=Gblobs}, Bucket,
             Stream, Fun) ->
-    GetBucketOpts = make_get_bucket_opts(PartitionStr, Bucket, Stream),
+    GetBucketOpts = make_get_bucket_opts(PartitionDir, Bucket, Stream),
     case rscbag:get(Gblobs, {Bucket, Stream}, GetBucketOpts) of
         {{ok, _, Gblob}, Gblobs1} -> {ok, Fun(Gblob), State#state{gblobs=Gblobs1}};
         Error -> {error, Error, State}

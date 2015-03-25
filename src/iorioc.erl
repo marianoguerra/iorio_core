@@ -11,9 +11,12 @@ start_link(Opts) ->
     Partitions = proplists:get_value(partitions, Opts, 64),
     SeedNode = proplists:get_value(seednode, Opts, iorioc),
     HashFun = shard_util:new_chash_fun(Partitions, SeedNode),
-    ResourceOpts = proplists:get_value(resource_opts, Opts,
+    ResourceOpts = proplists:get_value(rscbag_opts, Opts,
                                        [{resource_handler, iorioc_shard_rhandler}]),
-    shard:start_link([{resource_opts, ResourceOpts}, {hash_fun, HashFun}]).
+    ShardOpts = proplists:get_value(shard_opts, Opts, []),
+    shard:start_link([{rscbag_opts, ResourceOpts},
+                      {shard_opts, ShardOpts},
+                      {hash_fun, HashFun}]).
 
 get(Shard, Bucket, Stream, From) ->
     get(Shard, Bucket, Stream, From, 1).
