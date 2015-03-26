@@ -86,7 +86,7 @@ create_groups(AccessLogic) ->
     % TODO: move this to permiso
     UserGroup = ?USER_GROUP,
     AdminGroup = list_to_binary(?ADMIN_GROUP),
-    riak_core_security:alter_group(AdminGroup, [{"groups", [UserGroup]}]).
+    ioriol_access:group_inherit(AccessLogic, AdminGroup, [UserGroup]).
 
 env(Opts, Key) ->
     case proplists:lookup(Key, Opts) of
