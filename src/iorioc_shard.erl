@@ -1,10 +1,10 @@
 -module(iorioc_shard).
 
--export([init/1, stop/1, ping/1, get/5, put/6, list_buckets/1, list_streams/2,
+-export([init/1, stop/1, ping/1, get/5, put/6, put/7, list_buckets/1, list_streams/2,
          bucket_size/2, subscribe/5, unsubscribe/4, partition/1, is_empty/1,
          delete/1, has_bucket/2, maybe_evict/2, foldl_gblobs/3]).
 
--ignore_xref([init/1, stop/1, ping/1, get/5, put/6, list_buckets/1,
+-ignore_xref([init/1, stop/1, ping/1, get/5, put/6, put/7, list_buckets/1,
               list_streams/2, bucket_size/2, subscribe/5, unsubscribe/4,
               partition/1, is_empty/1, delete/1, has_bucket/2, maybe_evict/2,
               foldl_gblobs/3]).
@@ -56,13 +56,22 @@ get(State, Bucket, Stream, From, Count) ->
     {_, Reply, State1} = with_bucket(State, Bucket, Stream, Fun),
     {reply, Reply, State1}.
 
-put(State=#state{chans=Chans}, ReqId, Bucket, Stream, Timestamp, Data) ->
+put(State, ReqId, Bucket, Stream, Timestamp, Data) ->
+    put(State, ReqId, Bucket, Stream, Timestamp, Data, true).
+
+put(State=#state{chans=Chans}, ReqId, Bucket, Stream, Timestamp, Data, Publish) ->
     Fun = fun (Gblob) ->
                   Entry = gblob_server:put(Gblob, Timestamp, Data),
-                  {PubR, Chans1} = publish(Chans, Bucket, Stream, Entry),
-                  if PubR /= ok ->
-                         lager:warning("Publish error ~s/~s: ~p", [Bucket, Stream, PubR]);
-                     true -> ok
+                  Chans1 = if Publish ->
+                                 {PubR, Chans11} = publish(Chans, Bucket,
+                                                           Stream, Entry),
+                                 if PubR /= ok ->
+                                        lager:warning("Publish error ~s/~s: ~p",
+                                                      [Bucket, Stream, PubR]);
+                                    true -> ok
+                                 end,
+                                 Chans11;
+                             true -> Chans
                   end,
                   {Entry, Chans1}
           end,
