@@ -17,6 +17,7 @@
                 base_dir,
                 writer,
                 next_bucket_index=1,
+                gblob_config_fun,
                 max_bucket_time_no_evict_ms=60000,
                 max_bucket_size_bytes=52428800}).
 
@@ -34,11 +35,14 @@ init(Opts) ->
     PartitionStr = integer_to_list(Partition),
     PartitionDir = filename:join([BaseDir, PartitionStr]),
 
+    GblobConfigFun = proplists:get_value(gblob_config_fun, Opts, fun empty_gblob_config/4),
+
     % TODO: use a real process here and have a supervisor
     WriterPid = spawn(fun task_queue_runner/0),
 
     State = #state{partition=Partition, partition_str=PartitionStr,
                    partition_dir=PartitionDir, writer=WriterPid,
+                   gblob_config_fun=GblobConfigFun,
                    gblobs=Gblobs, chans=Chans, base_dir=BaseDir},
     {ok, State}.
 
@@ -182,14 +186,17 @@ foldl_gblobs(#state{partition_dir=Path}, Fun, Acc0) ->
 
 %% private functions
 
-make_get_bucket_opts(PartitionStr, Bucket, Stream) ->
+empty_gblob_config(_PartitionStr, _Bucket, _Stream, Path) ->
+    GblobOpts = [],
+    GblobServerOpts = [],
+    [{path, Path},
+     {gblob_opts, GblobOpts},
+     {gblob_server_opts, GblobServerOpts}].
+
+make_get_bucket_opts(PartitionStr, Bucket, Stream, GblobConfigFun) ->
     fun () ->
             Path = filename:join([PartitionStr, Bucket, Stream]),
-            GblobOpts = [],
-            GblobServerOpts = [],
-            [{path, Path},
-             {gblob_opts, GblobOpts},
-             {gblob_server_opts, GblobServerOpts}]
+            GblobConfigFun(PartitionStr, Bucket, Stream, Path)
     end.
 
 list_dir(Path) ->
@@ -236,9 +243,10 @@ publish(Chans, Bucket, Stream, Entry) ->
                          end
                  end).
 
-with_bucket(State=#state{partition_dir=PartitionDir, gblobs=Gblobs}, Bucket,
+with_bucket(State=#state{partition_dir=PartitionDir, gblobs=Gblobs,
+                         gblob_config_fun=GblobConfigFun}, Bucket,
             Stream, Fun) ->
-    GetBucketOpts = make_get_bucket_opts(PartitionDir, Bucket, Stream),
+    GetBucketOpts = make_get_bucket_opts(PartitionDir, Bucket, Stream, GblobConfigFun),
     case rscbag:get(Gblobs, {Bucket, Stream}, GetBucketOpts) of
         {{ok, _, Gblob}, Gblobs1} -> {ok, Fun(Gblob), State#state{gblobs=Gblobs1}};
         Error -> {error, Error, State}
