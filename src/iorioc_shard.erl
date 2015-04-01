@@ -1,15 +1,21 @@
 -module(iorioc_shard).
 
 -export([init/1, stop/1, ping/1, get/5, put/6, list_buckets/1, list_streams/2,
-         bucket_size/2, subscribe/5, unsubscribe/4, partition/1]).
+         bucket_size/2, subscribe/5, unsubscribe/4, partition/1, is_empty/1,
+         delete/1, has_bucket/2, maybe_evict/2, foldl_gblobs/3]).
 
 -ignore_xref([init/1, stop/1, ping/1, get/5, put/6, list_buckets/1,
               list_streams/2, bucket_size/2, subscribe/5, unsubscribe/4,
-              partition/1]).
+              partition/1, is_empty/1, delete/1, has_bucket/2, maybe_evict/2,
+              foldl_gblobs/3]).
 
 -include_lib("sblob/include/sblob.hrl").
 
--record(state, {partition, partition_str, partition_dir, gblobs, chans, base_dir}).
+-record(state, {partition, partition_str, partition_dir, gblobs, chans,
+                base_dir,
+                next_bucket_index=1,
+                max_bucket_time_no_evict_ms=60000,
+                max_bucket_size_bytes=52428800}).
 
 init(Opts) ->
     {shard_lib_partition, Partition} = proplists:lookup(shard_lib_partition, Opts),
@@ -35,6 +41,15 @@ stop(#state{gblobs=Gblobs, chans=Chans}) ->
     ok.
 
 partition(#state{partition=Partition}) -> Partition.
+is_empty(State=#state{partition_dir=Path}) ->
+        (not filelib:is_dir(Path)) orelse (length(list_bucket_names(State)) == 0).
+
+delete(#state{partition_dir=Path}) ->
+    sblob_util:remove(Path).
+
+has_bucket(#state{partition_dir=Path}, Bucket) ->
+    BucketPath = filename:join([Path, Bucket]),
+    filelib:is_dir(BucketPath).
 
 get(State, Bucket, Stream, From, Count) ->
     Fun = fun (Gblob) -> gblob_server:get(Gblob, From, Count) end,
@@ -99,6 +114,45 @@ unsubscribe(State=#state{chans=Chans}, Bucket, Stream, Pid) ->
 ping(State=#state{partition=Partition}) ->
     {reply, {pong, Partition}, State}.
 
+maybe_evict(State=#state{partition=Partition,
+                         next_bucket_index=NextBucketIndex,
+                         max_bucket_time_no_evict_ms=MaxTimeMsNoEviction,
+                         max_bucket_size_bytes=MaxBucketSize},
+            EvictFun) ->
+
+    BucketNames = lists:sort(list_bucket_names(State)),
+    BucketCount = length(BucketNames),
+    NewNextIndex = if BucketCount == 0 ->
+                          NextBucketIndex;
+                      BucketCount > NextBucketIndex ->
+                          1;
+                      true ->
+                          NextBucketIndex + 1
+                   end,
+
+    Result = if NextBucketIndex > BucketCount ->
+                    lager:debug("no eviction, no buckets in vnode ~p",
+                                [Partition]),
+                    ok;
+                true ->
+                    BucketName = lists:nth(NextBucketIndex, BucketNames),
+                    EvictFun(BucketName, Partition, MaxBucketSize,
+                             MaxTimeMsNoEviction)
+             end,
+    NewState = State#state{next_bucket_index=NewNextIndex},
+    {Result, NewState}.
+
+foldl_gblobs(#state{partition_dir=Path}, Fun, Acc0) ->
+    GblobNames = list_gblob_names(Path),
+    lists:foldl(fun ({BucketName, GblobName}, AccIn) ->
+                        BucketPath = filename:join([Path, BucketName, GblobName]),
+                        Gblob = gblob:open(BucketPath, []),
+                        AccOut = Fun({BucketName, Gblob}, AccIn),
+                        gblob:close(Gblob),
+
+                        AccOut
+                end, Acc0, GblobNames).
+
 %% private functions
 
 make_get_bucket_opts(PartitionStr, Bucket, Stream) ->
@@ -162,4 +216,15 @@ with_bucket(State=#state{partition_dir=PartitionDir, gblobs=Gblobs}, Bucket,
         {{ok, _, Gblob}, Gblobs1} -> {ok, Fun(Gblob), State#state{gblobs=Gblobs1}};
         Error -> {error, Error, State}
     end.
+
+list_gblob_names(Path) ->
+    BucketNames = list_bucket_names(Path),
+    lists:foldl(fun (BucketName, AccIn) ->
+                        BucketPath = filename:join([Path, BucketName]),
+                        GblobNames = list_dir(BucketPath),
+                        lists:foldl(fun (StreamName, Items) ->
+                                            StreamNameBin = list_to_binary(StreamName),
+                                            [{BucketName, StreamNameBin}|Items]
+                                    end, AccIn, GblobNames)
+                end, [], BucketNames).
 

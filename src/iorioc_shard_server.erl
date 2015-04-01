@@ -1,12 +1,11 @@
 -module(iorioc_shard_server).
 
 -export([ping/1, get/5, put/6, list_buckets/1, list_streams/2, bucket_size/2,
-         subscribe/5, unsubscribe/4,
-         stop/1, start_link/1]).
+         subscribe/5, unsubscribe/4, stop/1, start_link/1]).
 
--ignore_xref([ping/1, get/5, put/6, list_buckets/1, list_streams/2, bucket_size/2,
-              subscribe/5, unsubscribe/4,
-              stop/1, start_link/1]).
+-ignore_xref([ping/1, get/5, put/6, list_buckets/1, list_streams/2,
+              bucket_size/2, subscribe/5, unsubscribe/4, stop/1,
+              start_link/1]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3]).
