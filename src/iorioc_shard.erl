@@ -1,12 +1,14 @@
 -module(iorioc_shard).
 
--export([init/1, stop/1, ping/1, get/5, put/6, put/7, list_buckets/1, list_streams/2,
-         bucket_size/2, subscribe/5, unsubscribe/4, partition/1, writer/1, is_empty/1,
-         delete/1, has_bucket/2, maybe_evict/2, foldl_gblobs/3]).
+-export([init/1, stop/1, ping/1, get/5, put/6, put_if_last_seqnum/7, put/7,
+         list_buckets/1, list_streams/2, bucket_size/2, subscribe/5,
+         unsubscribe/4, partition/1, writer/1, is_empty/1, delete/1,
+         has_bucket/2, maybe_evict/2, foldl_gblobs/3]).
 
--ignore_xref([init/1, stop/1, ping/1, get/5, put/6, put/7, list_buckets/1,
-              list_streams/2, bucket_size/2, subscribe/5, unsubscribe/4,
-              partition/1, writer/1, is_empty/1, delete/1, has_bucket/2, maybe_evict/2,
+-ignore_xref([init/1, stop/1, ping/1, get/5, put/6, put/7,
+              put_if_last_seqnum/7, list_buckets/1, list_streams/2,
+              bucket_size/2, subscribe/5, unsubscribe/4, partition/1, writer/1,
+              is_empty/1, delete/1, has_bucket/2, maybe_evict/2,
               foldl_gblobs/3]).
 
 -include_lib("sblob/include/sblob.hrl").
@@ -62,12 +64,22 @@ get(State, Bucket, Stream, From, Count) ->
     {_, Reply, State1} = with_bucket(State, Bucket, Stream, Fun),
     {reply, Reply, State1}.
 
-put(State, ReqId, Bucket, Stream, Timestamp, Data) ->
-    put(State, ReqId, Bucket, Stream, Timestamp, Data, true).
+put_if_last_seqnum(State, ReqId, Bucket, Stream, Timestamp, Data, LastSeqNum) ->
+    put(State, ReqId, Bucket, Stream, Timestamp, Data, true, LastSeqNum).
 
-put(State=#state{chans=Chans}, ReqId, Bucket, Stream, Timestamp, Data, Publish) ->
+put(State, ReqId, Bucket, Stream, Timestamp, Data) ->
+    put(State, ReqId, Bucket, Stream, Timestamp, Data, true, nil).
+
+put(State, ReqId, Bucket, Stream, Timestamp, Data, Publish) ->
+    put(State, ReqId, Bucket, Stream, Timestamp, Data, Publish, nil).
+
+put(State=#state{chans=Chans}, ReqId, Bucket, Stream, Timestamp, Data, Publish, LastSeqNum) ->
     Fun = fun (Gblob) ->
-                  Entry = gblob_server:put(Gblob, Timestamp, Data),
+                  Entry = if LastSeqNum == nil ->
+                                 gblob_server:put(Gblob, Timestamp, Data);
+                             true ->
+                                 gblob_server:put(Gblob, Timestamp, Data, LastSeqNum)
+                          end,
                   Chans1 = if Publish ->
                                  {PubR, Chans11} = publish(Chans, Bucket,
                                                            Stream, Entry),
