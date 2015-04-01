@@ -1,11 +1,11 @@
 -module(iorioc).
 -export([ping/1, get/4, get/5, put/6, list_buckets/1, list_streams/2,
          subscribe/4, subscribe/5, unsubscribe/4,
-         bucket_size/2, start_link/1]).
+         bucket_size/2, start_link/1, stop/1]).
 
 -ignore_xref([ping/1, get/4, get/5, put/6, list_buckets/1, list_streams/2,
               subscribe/4, subscribe/5, unsubscribe/4,
-              bucket_size/2, start_link/1]).
+              bucket_size/2, start_link/1, stop/1]).
 
 start_link(Opts) ->
     Partitions = proplists:get_value(partitions, Opts, 64),
@@ -17,6 +17,9 @@ start_link(Opts) ->
     shard:start_link([{rscbag_opts, ResourceOpts},
                       {shard_opts, ShardOpts},
                       {hash_fun, HashFun}]).
+
+stop(Shard) ->
+    shard:stop(Shard).
 
 get(Shard, Bucket, Stream, From) ->
     get(Shard, Bucket, Stream, From, 1).

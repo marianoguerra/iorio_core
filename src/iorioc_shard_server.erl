@@ -48,6 +48,7 @@ init(Opts) ->
     iorioc_shard:init(Opts).
 
 handle_call(stop, _From, State) ->
+    iorioc_shard:stop(State),
     {stop, normal, stopped, State};
 
 handle_call({get, Bucket, Stream, From, Count}, _From, State) ->
