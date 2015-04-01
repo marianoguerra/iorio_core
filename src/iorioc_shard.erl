@@ -13,6 +13,7 @@
 
 -record(state, {partition, partition_str, partition_dir, gblobs, chans,
                 base_dir,
+                writer,
                 next_bucket_index=1,
                 max_bucket_time_no_evict_ms=60000,
                 max_bucket_size_bytes=52428800}).
@@ -30,8 +31,12 @@ init(Opts) ->
     BaseDir = filename:absname(BaseDir0),
     PartitionStr = integer_to_list(Partition),
     PartitionDir = filename:join([BaseDir, PartitionStr]),
+
+    % TODO: use a real process here and have a supervisor
+    WriterPid = spawn(fun task_queue_runner/0),
+
     State = #state{partition=Partition, partition_str=PartitionStr,
-                   partition_dir=PartitionDir,
+                   partition_dir=PartitionDir, writer=WriterPid,
                    gblobs=Gblobs, chans=Chans, base_dir=BaseDir},
     {ok, State}.
 
@@ -237,3 +242,10 @@ list_gblob_names(Path) ->
                                     end, AccIn, GblobNames)
                 end, [], BucketNames).
 
+task_queue_runner() ->
+    receive F ->
+                try F()
+                catch T:E -> lager:warning("error running task ~p ~p", [T, E])
+                after task_queue_runner()
+                end
+    end.
