@@ -1,12 +1,12 @@
 -module(iorioc_shard).
 
 -export([init/1, stop/1, ping/1, get/5, put/6, put/7, list_buckets/1, list_streams/2,
-         bucket_size/2, subscribe/5, unsubscribe/4, partition/1, is_empty/1,
+         bucket_size/2, subscribe/5, unsubscribe/4, partition/1, writer/1, is_empty/1,
          delete/1, has_bucket/2, maybe_evict/2, foldl_gblobs/3]).
 
 -ignore_xref([init/1, stop/1, ping/1, get/5, put/6, put/7, list_buckets/1,
               list_streams/2, bucket_size/2, subscribe/5, unsubscribe/4,
-              partition/1, is_empty/1, delete/1, has_bucket/2, maybe_evict/2,
+              partition/1, writer/1, is_empty/1, delete/1, has_bucket/2, maybe_evict/2,
               foldl_gblobs/3]).
 
 -include_lib("sblob/include/sblob.hrl").
@@ -46,6 +46,7 @@ stop(#state{gblobs=Gblobs, chans=Chans}) ->
     ok.
 
 partition(#state{partition=Partition}) -> Partition.
+writer(#state{writer=Writer}) -> Writer.
 is_empty(State=#state{partition_dir=Path}) ->
         (not filelib:is_dir(Path)) orelse (length(list_bucket_names(State)) == 0).
 
