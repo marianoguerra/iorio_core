@@ -1,9 +1,9 @@
 -module(iorioc).
--export([ping/1, get/4, get/5, put/5, list_buckets/1, list_streams/2,
+-export([ping/1, get/4, get/5, put/6, list_buckets/1, list_streams/2,
          subscribe/4, subscribe/5, unsubscribe/4,
          bucket_size/2, start_link/1]).
 
--ignore_xref([ping/1, get/4, get/5, put/5, list_buckets/1, list_streams/2,
+-ignore_xref([ping/1, get/4, get/5, put/6, list_buckets/1, list_streams/2,
               subscribe/4, subscribe/5, unsubscribe/4,
               bucket_size/2, start_link/1]).
 
@@ -25,8 +25,8 @@ get(Shard, Bucket, Stream, From, Count) ->
     MFA = {iorioc_shard, get, [Bucket, Stream, From, Count]},
     shard:handle(Shard, {Bucket, Stream}, MFA).
 
-put(Shard, Bucket, Stream, Timestamp, Data) ->
-    MFA = {iorioc_shard, put, [Bucket, Stream, Timestamp, Data]},
+put(Shard, ReqId, Bucket, Stream, Timestamp, Data) ->
+    MFA = {iorioc_shard, put, [ReqId, Bucket, Stream, Timestamp, Data]},
     shard:handle(Shard, {Bucket, Stream}, MFA).
 
 list_buckets(Shard) ->
@@ -47,7 +47,7 @@ subscribe(Shard, Bucket, Stream, Pid) ->
 subscribe(Shard, Bucket, Stream, FromSeqNum, Pid) ->
     MFA = {iorioc_shard, subscribe, [Bucket, Stream, FromSeqNum, Pid]},
     shard:handle(Shard, {Bucket, Stream}, MFA).
-    
+
 unsubscribe(Shard, Bucket, Stream, Pid) ->
     MFA = {iorioc_shard, unsubscribe, [Bucket, Stream, Pid]},
     shard:handle(Shard, {Bucket, Stream}, MFA).

@@ -1,10 +1,10 @@
 -module(iorioc_shard).
 
--export([ping/1, get/5, put/5, list_buckets/1, list_streams/2, bucket_size/2,
+-export([ping/1, get/5, put/6, list_buckets/1, list_streams/2, bucket_size/2,
          subscribe/5, unsubscribe/4,
          stop/1, start_link/1]).
 
--ignore_xref([ping/1, get/5, put/5, list_buckets/1, list_streams/2, bucket_size/2,
+-ignore_xref([ping/1, get/5, put/6, list_buckets/1, list_streams/2, bucket_size/2,
               subscribe/5, unsubscribe/4,
               stop/1, start_link/1]).
 
@@ -21,8 +21,8 @@ start_link(Opts) ->
 get(Pid, Bucket, Stream, From, Count) ->
     gen_server:call(Pid, {get, Bucket, Stream, From, Count}).
 
-put(Pid, Bucket, Stream, Timestamp, Data) ->
-    gen_server:call(Pid, {put, Bucket, Stream, Timestamp, Data}).
+put(Pid, ReqId, Bucket, Stream, Timestamp, Data) ->
+    gen_server:call(Pid, {put, ReqId, Bucket, Stream, Timestamp, Data}).
 
 list_buckets(Pid) ->
     gen_server:call(Pid, list_buckets).
@@ -73,7 +73,7 @@ handle_call({get, Bucket, Stream, From, Count}, _From, State) ->
     {_, Reply, State1} = with_bucket(State, Bucket, Stream, Fun),
     {reply, Reply, State1};
 
-handle_call({put, Bucket, Stream, Timestamp, Data}, _From, State=#state{chans=Chans}) ->
+handle_call({put, ReqId, Bucket, Stream, Timestamp, Data}, _From, State=#state{chans=Chans}) ->
     Fun = fun (Gblob) ->
                   Entry = gblob_server:put(Gblob, Timestamp, Data),
                   {PubR, Chans1} = publish(Chans, Bucket, Stream, Entry),
@@ -86,9 +86,9 @@ handle_call({put, Bucket, Stream, Timestamp, Data}, _From, State=#state{chans=Ch
 
     case with_bucket(State, Bucket, Stream, Fun) of
         {ok, {R, Chans1}, S1} ->
-            {reply, R, S1#state{chans=Chans1}};
+            {reply, {ReqId, R}, S1#state{chans=Chans1}};
         {error, R, S1} ->
-            {reply, R, S1}
+            {reply, {ReqId, R}, S1}
     end;
 
 handle_call({subscribe, Bucket, Stream, FromSeqNum, Pid}, _From,
