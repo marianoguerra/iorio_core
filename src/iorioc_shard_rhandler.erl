@@ -4,7 +4,7 @@
 -behaviour(rscbag_resource_handler).
 
 init(Opts) ->
-    iorioc_shard:start_link(Opts).
+    iorioc_shard_server:start_link(Opts).
 
 stop(Pid) ->
-    iorioc_shard:stop(Pid).
+    iorioc_shard_server:stop(Pid).

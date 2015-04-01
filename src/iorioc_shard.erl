@@ -1,51 +1,14 @@
 -module(iorioc_shard).
 
--export([ping/1, get/5, put/6, list_buckets/1, list_streams/2, bucket_size/2,
-         subscribe/5, unsubscribe/4,
-         stop/1, start_link/1]).
+-export([init/1, ping/1, get/5, put/6, list_buckets/1, list_streams/2,
+         bucket_size/2, subscribe/5, unsubscribe/4]).
 
--ignore_xref([ping/1, get/5, put/6, list_buckets/1, list_streams/2, bucket_size/2,
-              subscribe/5, unsubscribe/4,
-              stop/1, start_link/1]).
-
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-         code_change/3]).
-
--behaviour(gen_server).
+-ignore_xref([init/1, ping/1, get/5, put/6, list_buckets/1, list_streams/2,
+              bucket_size/2, subscribe/5, unsubscribe/4]).
 
 -include_lib("sblob/include/sblob.hrl").
 
-start_link(Opts) ->
-    gen_server:start_link(?MODULE, Opts, []).
-
-get(Pid, Bucket, Stream, From, Count) ->
-    gen_server:call(Pid, {get, Bucket, Stream, From, Count}).
-
-put(Pid, ReqId, Bucket, Stream, Timestamp, Data) ->
-    gen_server:call(Pid, {put, ReqId, Bucket, Stream, Timestamp, Data}).
-
-list_buckets(Pid) ->
-    gen_server:call(Pid, list_buckets).
-
-list_streams(Pid, Bucket) ->
-    gen_server:call(Pid, {list_streams, Bucket}).
-
-bucket_size(Pid, Bucket) ->
-    gen_server:call(Pid, {size, Bucket}).
-
-subscribe(Pid, Bucket, Stream, FromSeqNum, SubPid) ->
-    gen_server:call(Pid, {subscribe, Bucket, Stream, FromSeqNum, SubPid}).
-
-unsubscribe(Pid, Bucket, Stream, SubPid) ->
-    gen_server:call(Pid, {unsubscribe, Bucket, Stream, SubPid}).
-
-ping(Pid) -> gen_server:call(Pid, ping).
-
-stop(Pid) -> gen_server:call(Pid, stop).
-
 -record(state, {partition, partition_str, partition_dir, gblobs, chans, base_dir}).
-
-%% gen_server callbacks
 
 init(Opts) ->
     {shard_lib_partition, Partition} = proplists:lookup(shard_lib_partition, Opts),
@@ -65,15 +28,12 @@ init(Opts) ->
                    gblobs=Gblobs, chans=Chans, base_dir=BaseDir},
     {ok, State}.
 
-handle_call(stop, _From, State) ->
-    {stop, normal, stopped, State};
-
-handle_call({get, Bucket, Stream, From, Count}, _From, State) ->
+get(State, Bucket, Stream, From, Count) ->
     Fun = fun (Gblob) -> gblob_server:get(Gblob, From, Count) end,
     {_, Reply, State1} = with_bucket(State, Bucket, Stream, Fun),
-    {reply, Reply, State1};
+    {reply, Reply, State1}.
 
-handle_call({put, ReqId, Bucket, Stream, Timestamp, Data}, _From, State=#state{chans=Chans}) ->
+put(State=#state{chans=Chans}, ReqId, Bucket, Stream, Timestamp, Data) ->
     Fun = fun (Gblob) ->
                   Entry = gblob_server:put(Gblob, Timestamp, Data),
                   {PubR, Chans1} = publish(Chans, Bucket, Stream, Entry),
@@ -89,10 +49,27 @@ handle_call({put, ReqId, Bucket, Stream, Timestamp, Data}, _From, State=#state{c
             {reply, {ReqId, R}, S1#state{chans=Chans1}};
         {error, R, S1} ->
             {reply, {ReqId, R}, S1}
-    end;
+    end.
 
-handle_call({subscribe, Bucket, Stream, FromSeqNum, Pid}, _From,
-            State=#state{chans=Chans}) ->
+list_buckets(State=#state{partition_dir=PartitionDir}) ->
+    Buckets = list_bucket_names(PartitionDir),
+    {reply, Buckets, State}.
+
+list_streams(State=#state{partition_dir=PartitionDir}, Bucket) ->
+    Streams = list_stream_names(PartitionDir, Bucket),
+    {reply, Streams, State}.
+
+bucket_size(State=#state{partition_dir=PartitionDir}, Bucket) ->
+    Streams = list_stream_names(PartitionDir, Bucket),
+    R = lists:foldl(fun (Stream, {TotalSize, Sizes}) ->
+                            StreamSize = stream_size(PartitionDir, Bucket, Stream),
+                            NewTotalSize = TotalSize + StreamSize,
+                            NewSizes = [{Stream, StreamSize}|Sizes],
+                            {NewTotalSize, NewSizes}
+                    end, {0, []}, Streams),
+    {reply, R, State}.
+
+subscribe(State=#state{chans=Chans}, Bucket, Stream, FromSeqNum, Pid) ->
     {Reply, Chans1} = with_channel(Chans, Bucket, Stream,
                           fun (Chann) ->
                                   if FromSeqNum == nil -> ok;
@@ -101,49 +78,18 @@ handle_call({subscribe, Bucket, Stream, FromSeqNum, Pid}, _From,
                                   smc:subscribe(Chann, Pid),
                                   ok
                           end),
-    {reply, Reply, State#state{chans=Chans1}};
+    {reply, Reply, State#state{chans=Chans1}}.
 
-handle_call({unsubscribe, Bucket, Stream, Pid}, _From,
-            State=#state{chans=Chans}) ->
+unsubscribe(State=#state{chans=Chans}, Bucket, Stream, Pid) ->
     {Reply, Chans1} = with_channel(Chans, Bucket, Stream,
                                    fun (Chann) ->
                                            smc:unsubscribe(Chann, Pid),
                                            ok
                                    end),
-    {reply, Reply, State#state{chans=Chans1}};
+    {reply, Reply, State#state{chans=Chans1}}.
 
-handle_call({size, Bucket}, _From, State=#state{partition_dir=PartitionDir}) ->
-    Streams = list_stream_names(PartitionDir, Bucket),
-    R = lists:foldl(fun (Stream, {TotalSize, Sizes}) ->
-                            StreamSize = stream_size(PartitionDir, Bucket, Stream),
-                            NewTotalSize = TotalSize + StreamSize,
-                            NewSizes = [{Stream, StreamSize}|Sizes],
-                            {NewTotalSize, NewSizes}
-                    end, {0, []}, Streams),
-    {reply, R, State};
-
-handle_call(ping, _From, State=#state{partition=Partition}) ->
-    {reply, {pong, Partition}, State};
-
-handle_call(list_buckets, _From, State=#state{partition_dir=PartitionDir}) ->
-    Buckets = list_bucket_names(PartitionDir),
-    {reply, Buckets, State};
-
-handle_call({list_streams, Bucket}, _From, State=#state{partition_dir=PartitionDir}) ->
-    Streams = list_stream_names(PartitionDir, Bucket),
-    {reply, Streams, State}.
-
-handle_info(_Msg, State) ->
-    {noreply, State}.
-
-handle_cast(_Msg, State) ->
-    {noreply, State}.
-
-terminate(_Reason, _State) ->
-    ok.
-
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
+ping(State=#state{partition=Partition}) ->
+    {reply, {pong, Partition}, State}.
 
 %% private functions
 
