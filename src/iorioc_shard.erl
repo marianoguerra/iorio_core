@@ -1,10 +1,11 @@
 -module(iorioc_shard).
 
--export([init/1, ping/1, get/5, put/6, list_buckets/1, list_streams/2,
-         bucket_size/2, subscribe/5, unsubscribe/4]).
+-export([init/1, stop/1, ping/1, get/5, put/6, list_buckets/1, list_streams/2,
+         bucket_size/2, subscribe/5, unsubscribe/4, partition/1]).
 
--ignore_xref([init/1, ping/1, get/5, put/6, list_buckets/1, list_streams/2,
-              bucket_size/2, subscribe/5, unsubscribe/4]).
+-ignore_xref([init/1, stop/1, ping/1, get/5, put/6, list_buckets/1,
+              list_streams/2, bucket_size/2, subscribe/5, unsubscribe/4,
+              partition/1]).
 
 -include_lib("sblob/include/sblob.hrl").
 
@@ -27,6 +28,13 @@ init(Opts) ->
                    partition_dir=PartitionDir,
                    gblobs=Gblobs, chans=Chans, base_dir=BaseDir},
     {ok, State}.
+
+stop(#state{gblobs=Gblobs, chans=Chans}) ->
+    rscbag:stop(Gblobs),
+    rscbag:stop(Chans),
+    ok.
+
+partition(#state{partition=Partition}) -> Partition.
 
 get(State, Bucket, Stream, From, Count) ->
     Fun = fun (Gblob) -> gblob_server:get(Gblob, From, Count) end,
