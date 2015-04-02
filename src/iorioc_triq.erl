@@ -57,7 +57,7 @@ intervals(Length) -> vector(Length, pos_integer()).
 gblob_opts() ->
     ?LET({PosInteger1, PosInteger2, MaxAgeMs}, {pos_integer(), pos_integer(), pos_integer()},
          begin
-             [{max_items, PosInteger1 + 1}, 
+             [{max_items, PosInteger1 + 1},
               {max_age_ms, MaxAgeMs},
               {max_size_bytes, PosInteger2 + 1}]
          end).
@@ -90,9 +90,16 @@ run_commands({Commands, Streams, Intervals, GblobOpts, GblobServerOpts}) ->
     {ok, Shard} = iorioc:start_link([{shard_opts, ShardOpts}]),
     UniqueStreams = sets:to_list(sets:from_list(Streams)),
     State = new_state(UniqueStreams, Intervals),
-    R = exec_commands(Commands, State, Shard),
-    iorioc:stop(Shard),
-    R.
+    try
+        exec_commands(Commands, State, Shard)
+    catch
+        T:E ->
+            io:format("ERROR: ~p ~p~n~n", [T, E]),
+            io:format("  ~p~n", [file_handle_cache:info()]),
+            true
+    after
+        iorioc:stop(Shard)
+    end.
 
 exec_commands([], _State, _Shard) ->
     true;
@@ -189,6 +196,7 @@ exec_command({get, Count}, State, Shard) ->
               GotCount < ExpectedCount andalso GotCount > 0 ->
                   #sblob_entry{seqnum=LastSeqNumReceived} = lists:last(R),
                   if LastSeqNum == LastSeqNumReceived ->
+                         dump_processes(),
                          io:format("*"),
                          true;
                      true -> false
@@ -217,3 +225,47 @@ exec_command({get_non_existing, Count}, State=#{free := [StreamId|_]}, Shard) ->
     From = 0,
     R = iorioc:get(Shard, Bucket, Stream, From, Count),
     {length(R) == 0, State}.
+
+dump_processes() ->
+    PCount = erlang:system_info(process_count),
+    if PCount rem 10 == 0 ->
+           Dict = get_info(erlang:processes(), dict:new()),
+           DList = dict:to_list(Dict),
+           lists:foreach(fun ({Key, Val}) ->
+                                 if Val > 50 ->
+                                        io:format("~p: ~p~n", [Key, Val]);
+                                    true -> ok
+                                 end
+                         end, DList);
+       true ->
+           ok
+    end.
+
+get_info([], Dict) ->
+    Dict;
+get_info([P|L], Dict) ->
+    case erlang:process_info(P, dictionary) of
+        {dictionary, Info} ->
+            Initial_call = proplists:get_value('$initial_call', Info, nil),
+            Ancestor = proplists:get_value('$ancestors', Info, nil),
+            Key = {Initial_call, Ancestor},
+            IncrNb = case dict:find(Key, Dict) of
+                {ok, Nb} -> Nb + 1;
+                error -> 1
+            end,
+            case Key of
+                {nil, nil} ->
+                    %io:format("~p~n", [erlang:process_info(P, current_function)]);
+                    ok;
+                _ -> ok
+            end,
+            Dict2 = dict:store({Initial_call, Ancestor}, IncrNb, Dict),
+            get_info(L, Dict2);
+        undefined ->
+            IncrNb = case dict:find(undefined, Dict) of
+                {ok, Nb} -> Nb + 1;
+                error -> 1
+            end,
+            Dict2 = dict:store(undefined, IncrNb, Dict),
+            get_info(L, Dict2)
+    end.

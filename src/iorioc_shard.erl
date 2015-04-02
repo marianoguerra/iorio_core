@@ -38,7 +38,7 @@ init(Opts) ->
     GblobConfigFun = proplists:get_value(gblob_config_fun, Opts, fun empty_gblob_config/4),
 
     % TODO: use a real process here and have a supervisor
-    WriterPid = spawn(fun task_queue_runner/0),
+    WriterPid = spawn_link(fun task_queue_runner/0),
 
     State = #state{partition=Partition, partition_str=PartitionStr,
                    partition_dir=PartitionDir, writer=WriterPid,
@@ -46,9 +46,10 @@ init(Opts) ->
                    gblobs=Gblobs, chans=Chans, base_dir=BaseDir},
     {ok, State}.
 
-stop(#state{gblobs=Gblobs, chans=Chans}) ->
+stop(#state{gblobs=Gblobs, chans=Chans, writer=Writer}) ->
     rscbag:stop(Gblobs),
     rscbag:stop(Chans),
+    Writer ! 'EXIT',
     ok.
 
 partition(#state{partition=Partition}) -> Partition.
@@ -264,9 +265,11 @@ list_gblob_names(Path) ->
                 end, [], BucketNames).
 
 task_queue_runner() ->
-    receive F ->
-                try F()
-                catch T:E -> lager:warning("error running task ~p ~p", [T, E])
-                after task_queue_runner()
-                end
+    receive
+        'EXIT' -> ok;
+        F ->
+            try F()
+            catch T:E -> lager:warning("error running task ~p ~p", [T, E])
+            after task_queue_runner()
+            end
     end.
