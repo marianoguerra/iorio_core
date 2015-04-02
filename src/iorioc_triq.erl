@@ -40,7 +40,6 @@ check_subscriber({_Bucket, _Stream}, [], LastSeqNum) when LastSeqNum /= notfound
     io:format("X"),
     true;
 check_subscriber({_Bucket, _Stream}, [#sblob_entry{seqnum=LastSeqNum}|_]=Entries, LastSeqNum) ->
-    io:format("C"),
     {_, Status} = lists:foldl(fun
                                   (#sblob_entry{seqnum=SeqNum}, {nil, Status}) ->
                                       {SeqNum, Status};
@@ -226,6 +225,8 @@ exec_command({put_new, Data}, State=#{subscriber := Subscriber}, Shard) ->
     Ref = make_ref(),
     BData = list_to_binary(Data),
     SeqNum = 1,
+    % give time to subscriber to subscribe
+    timer:sleep(1),
     case iorioc:put(Shard, Ref, Bucket, Stream, Ts, BData) of
         % TODO: seqnum
         {Ref, #sblob_entry{timestamp=Ts, data=BData, seqnum=SeqNum}} ->
