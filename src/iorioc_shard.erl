@@ -244,7 +244,7 @@ publish(Chans, Bucket, Stream, Entry) ->
     with_channel(Chans, Bucket, Stream,
                  fun (Chan) ->
                          try
-                             smc:send(Chan, Entry),
+                             smc:send(Chan, {entry, Bucket, Stream, Entry}),
                              ok
                          catch
                              Type:Error -> {error, {Type, Error}}
