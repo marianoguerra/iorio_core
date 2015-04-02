@@ -34,6 +34,39 @@ get_non_existing_stream() -> {get_non_existing, count()}.
 
 subscriber() -> subscriber(#{subs => #{}}).
 
+check_subscriber({_Bucket, _Stream}, [], notfound) ->
+    true;
+check_subscriber({_Bucket, _Stream}, [], LastSeqNum) when LastSeqNum /= notfound ->
+    io:format("X"),
+    true;
+check_subscriber({_Bucket, _Stream}, [#sblob_entry{seqnum=LastSeqNum}|_]=Entries, LastSeqNum) ->
+    io:format("C"),
+    {_, Status} = lists:foldl(fun
+                                  (#sblob_entry{seqnum=SeqNum}, {nil, Status}) ->
+                                      {SeqNum, Status};
+                                  (#sblob_entry{seqnum=SeqNum}, {PrevSeqNum, Status}) ->
+                                      if PrevSeqNum == SeqNum + 1 ->
+                                             {SeqNum, Status};
+                                         true ->
+                                             io:format("~p != ~p + 1", [PrevSeqNum, SeqNum]),
+                                             {SeqNum, false}
+                                      end
+                  end, {nil, true}, Entries),
+    Status;
+check_subscriber({_Bucket, _Stream}, [#sblob_entry{seqnum=SeqNum}|_], LastSeqNum) ->
+    io:format("last seqnums don't match ~p vs ~p~n", [SeqNum, LastSeqNum]),
+    false.
+
+check_subscribers(Subs, SeqNums) ->
+    maps:fold(fun (K={Bucket, Stream}, V, IsOk) ->
+                      KL = {binary_to_list(Bucket), binary_to_list(Stream)},
+                      LastSeqNum = maps:get(KL, SeqNums, notfound),
+                      if IsOk -> check_subscriber(K, V, LastSeqNum);
+                         true -> IsOk
+                      end
+              end, true, Subs).
+
+
 subscriber(State=#{subs:=Subs}) ->
     receive
         {subscribe, {{BucketL, StreamL}, Shard}} ->
@@ -57,6 +90,10 @@ subscriber(State=#{subs:=Subs}) ->
                     Subs1 = maps:put(Key, NewEntries, Subs),
                     subscriber(State#{subs=>Subs1})
             end;
+        {check, SeqNums, Pid} ->
+            Result = check_subscribers(Subs, SeqNums),
+            Pid ! Result,
+            subscriber(State);
         'EXIT' ->
             ok;
         Other ->
@@ -79,7 +116,8 @@ command() ->
            put_new_stream(),
            get_existing_stream(),
            get_existing_stream_out_of_bounds(),
-           get_non_existing_stream()
+           get_non_existing_stream(),
+           check_subscriptions
           ]).
 
 streams(Length) -> vector(Length rem 256, stream()).
@@ -263,7 +301,14 @@ exec_command({get_non_existing, Count}, State=#{free := [StreamId|_]}, Shard) ->
     {Bucket, Stream} = StreamId,
     From = 0,
     R = iorioc:get(Shard, Bucket, Stream, From, Count),
-    {length(R) == 0, State}.
+    {length(R) == 0, State};
+exec_command(check_subscriptions, State=#{seqnums := SeqNums, subscriber := Subscriber}, _Shard) ->
+    Subscriber ! {check, SeqNums, self()},
+    receive R -> {R, State}
+    after 1000 ->
+              io:format("timeout waiting for sub check~n"),
+              {false, State}
+    end.
 
 dump_processes() ->
     PCount = erlang:system_info(process_count),
