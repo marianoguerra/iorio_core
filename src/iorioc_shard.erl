@@ -66,7 +66,7 @@ has_bucket(#state{partition_dir=Path}, Bucket) ->
 
 get(State, Bucket, Stream, From, Count) ->
     Fun = fun (Gblob) -> gblob_server:get(Gblob, From, Count) end,
-    {_, Reply, State1} = with_bucket(State, Bucket, Stream, Fun),
+    {_, Reply, State1} = with_bucket(State, tob(Bucket), tob(Stream), Fun),
     {reply, Reply, State1}.
 
 put_if_last_seqnum(State, ReqId, Bucket, Stream, Timestamp, Data, LastSeqNum) ->
@@ -78,7 +78,9 @@ put(State, ReqId, Bucket, Stream, Timestamp, Data) ->
 put(State, ReqId, Bucket, Stream, Timestamp, Data, Publish) ->
     put(State, ReqId, Bucket, Stream, Timestamp, Data, Publish, nil).
 
-put(State=#state{chans=Chans}, ReqId, Bucket, Stream, Timestamp, Data, Publish, LastSeqNum) ->
+put(State=#state{chans=Chans}, ReqId, BucketPS, StreamPS, Timestamp, Data, Publish, LastSeqNum) ->
+    Bucket = tob(BucketPS),
+    Stream = tob(StreamPS),
     Fun = fun (Gblob) ->
                   Entry = if LastSeqNum == nil ->
                                  gblob_server:put(Gblob, Timestamp, Data);
@@ -124,18 +126,23 @@ bucket_size(State=#state{partition_dir=PartitionDir}, Bucket) ->
                     end, {0, []}, Streams),
     {reply, R, State}.
 
-subscribe(State=#state{chans=Chans}, Bucket, Stream, FromSeqNum, Pid) ->
+subscribe(State=#state{chans=Chans}, BucketPS, StreamPS, FromSeqNum, Pid) ->
+    Bucket = tob(BucketPS),
+    Stream = tob(StreamPS),
     {Reply, Chans1} = with_channel(Chans, Bucket, Stream,
                           fun (Chann) ->
                                   if FromSeqNum == nil -> ok;
                                      true -> smc:replay(Chann, Pid, FromSeqNum)
                                   end,
+                                  %io:format("sub  ~p ~p.~p~n", [now(), Bucket, Stream]),
                                   smc:subscribe(Chann, Pid),
                                   ok
                           end),
     {reply, Reply, State#state{chans=Chans1}}.
 
-unsubscribe(State=#state{chans=Chans}, Bucket, Stream, Pid) ->
+unsubscribe(State=#state{chans=Chans}, BucketPS, StreamPS, Pid) ->
+    Bucket = tob(BucketPS),
+    Stream = tob(StreamPS),
     {Reply, Chans1} = with_channel(Chans, Bucket, Stream,
                                    fun (Chann) ->
                                            smc:unsubscribe(Chann, Pid),
@@ -273,3 +280,6 @@ task_queue_runner() ->
             after task_queue_runner()
             end
     end.
+
+tob(S) when is_binary(S) -> S;
+tob(S) when is_list(S) -> list_to_binary(S).

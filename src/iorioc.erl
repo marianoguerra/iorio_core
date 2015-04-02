@@ -26,11 +26,11 @@ get(Shard, Bucket, Stream, From) ->
 
 get(Shard, Bucket, Stream, From, Count) ->
     MFA = {iorioc_shard_server, get, [Bucket, Stream, From, Count]},
-    shard:handle(Shard, {Bucket, Stream}, MFA).
+    shard:handle(Shard, key(Bucket, Stream), MFA).
 
 put(Shard, ReqId, Bucket, Stream, Timestamp, Data) ->
     MFA = {iorioc_shard_server, put, [ReqId, Bucket, Stream, Timestamp, Data]},
-    shard:handle(Shard, {Bucket, Stream}, MFA).
+    shard:handle(Shard, key(Bucket, Stream), MFA).
 
 list_buckets(Shard) ->
     MFA = {iorioc_shard_server, list_buckets, []},
@@ -49,12 +49,21 @@ subscribe(Shard, Bucket, Stream, Pid) ->
 
 subscribe(Shard, Bucket, Stream, FromSeqNum, Pid) ->
     MFA = {iorioc_shard_server, subscribe, [Bucket, Stream, FromSeqNum, Pid]},
-    shard:handle(Shard, {Bucket, Stream}, MFA).
+    shard:handle(Shard, key(Bucket, Stream), MFA).
 
 unsubscribe(Shard, Bucket, Stream, Pid) ->
     MFA = {iorioc_shard_server, unsubscribe, [Bucket, Stream, Pid]},
-    shard:handle(Shard, {Bucket, Stream}, MFA).
+    shard:handle(Shard, key(Bucket, Stream), MFA).
 
 ping(Shard) ->
     MFA = {iorioc_shard_server, ping, []},
     shard:handle(Shard, {<<"ping">>, now()}, MFA).
+
+% private
+key(Bucket, Stream) when is_list(Bucket) ->
+    key(list_to_binary(Bucket), Stream);
+key(Bucket, Stream) when is_list(Stream) ->
+    key(Bucket, list_to_binary(Stream));
+key(Bucket, Stream) ->
+    {Bucket, Stream}.
+

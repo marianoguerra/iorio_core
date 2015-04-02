@@ -32,10 +32,44 @@ get_existing_stream_out_of_bounds() -> {get_out_of_bounds, count()}.
 
 get_non_existing_stream() -> {get_non_existing, count()}.
 
+subscriber() -> subscriber(#{subs => #{}}).
+
+subscriber(State=#{subs:=Subs}) ->
+    receive
+        {subscribe, {{BucketL, StreamL}, Shard}} ->
+            Bucket = list_to_binary(BucketL),
+            Stream = list_to_binary(StreamL),
+            Key = {Bucket, Stream},
+            %io:format("subscribing ~p/~p~n", [Bucket, Stream]),
+            iorioc:subscribe(Shard, Bucket, Stream, self()),
+            Subs1 = maps:put(Key, [], Subs),
+            subscriber(State#{subs => Subs1});
+        {entry, Bucket, Stream, Entry} ->
+            Key = {Bucket, Stream},
+            %io:format("got entry for ~p/~p~n", [Bucket, Stream]),
+            case maps:get(Key, Subs, notfound) of
+                notfound ->
+                    io:format("received entry from unsubscribed channel ~p/~p~n",
+                              [Bucket, Stream]),
+                    subscriber(State);
+                Entries ->
+                    NewEntries = [Entry|Entries],
+                    Subs1 = maps:put(Key, NewEntries, Subs),
+                    subscriber(State#{subs=>Subs1})
+            end;
+        'EXIT' ->
+            ok;
+        Other ->
+            io:format("Unknown Msg ~p~n", [Other]),
+            subscriber(State)
+    end.
+
 new_state(Streams, Intervals) ->
+    Pid = spawn(fun subscriber/0),
     #{current => [],
       free => Streams,
       seqnums => #{},
+      subscriber => Pid,
       ts => Intervals,
       t => 0}.
 
@@ -98,7 +132,8 @@ run_commands({Commands, Streams, Intervals, GblobOpts, GblobServerOpts}) ->
             io:format("  ~p~n", [file_handle_cache:info()]),
             true
     after
-        iorioc:stop(Shard)
+        iorioc:stop(Shard),
+        maps:get(subscriber, State) ! 'EXIT'
     end.
 
 exec_commands([], _State, _Shard) ->
@@ -147,8 +182,9 @@ exec_command(nop, State, _Shard) ->
     {true, State};
 exec_command({put_new, _Data}, State=#{free := []}, _Shard) ->
     {true, State};
-exec_command({put_new, Data}, State, Shard) ->
+exec_command({put_new, Data}, State=#{subscriber := Subscriber}, Shard) ->
     {NewState, Ts, _Int, Bucket, Stream} = get_new_stream(State),
+    Subscriber ! {subscribe, {{Bucket, Stream}, Shard}},
     Ref = make_ref(),
     BData = list_to_binary(Data),
     SeqNum = 1,
@@ -197,6 +233,9 @@ exec_command({get, Count}, State, Shard) ->
                   #sblob_entry{seqnum=LastSeqNumReceived} = lists:last(R),
                   if LastSeqNum == LastSeqNumReceived ->
                          dump_processes(),
+                         % code to reproduce this issue below, I think is because eviction
+                         % removes old events that's why we get less
+                         % iorioc_triq:run_commands({[{put_new,"  X  Ov BRrucDn "}, {put," s"}, {put,"xs"}, {get,40}], [{"498lkhWLRN1O96UE74JkZgO9t8K", "pxiB482kxYv4ftNH7LO292s8X1C"}, {"5Ndr7CgXsUZ5IYi7y7jPSc7N4I", "pH31w2Zg935E97q5fV65dCOcTzr2"}, {"6dhL2","55hSyQm7D2zZp"}, {"ksqlD327g3D2e5K","uwCPwyvtBr3K"}, {"xyEbk3yevPP65K5ol17589eIw59x", "Jh2FxcygGuqqeddREV5Rud3z12pwNr"}], [13,29,13,34,9], [{max_items,15},{max_age_ms,0},{max_size_bytes,14}], [{check_interval_ms,37},{max_interval_no_eviction_ms,35}]}).
                          io:format("*"),
                          true;
                      true -> false
@@ -232,7 +271,7 @@ dump_processes() ->
            Dict = get_info(erlang:processes(), dict:new()),
            DList = dict:to_list(Dict),
            lists:foreach(fun ({Key, Val}) ->
-                                 if Val > 50 ->
+                                 if Val > 100 ->
                                         io:format("~p: ~p~n", [Key, Val]);
                                     true -> ok
                                  end
